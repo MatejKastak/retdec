@@ -20,6 +20,10 @@
 #include "retdec/loader/utils/range.h"
 #include "retdec/utils/address.h"
 
+#define R_AARCH64_CALL26 283
+#define R_AARCH64_ADR_PRE 275
+#define R_AARCH64_ADD_ABS 277
+
 namespace retdec {
 namespace loader {
 
@@ -133,10 +137,8 @@ void ElfImage::createExternSegment()
 
 	retdec::fileformat::SecSeg *new_segment = new retdec::fileformat::ElfSegment();
 	new_segment->setName(".EXTERN");
-	new_segment->setType(retdec::fileformat::SecSeg::Type::DATA);
+	new_segment->setType(retdec::fileformat::SecSeg::Type::CODE);
 
-	// TODO(mato): For some reason decoder checks only physical size
-	// This makes this segment size -> 1. Maybe it does not matter?
 	new_segment->setSizeInMemory(fake_segment_size);
 	new_segment->setSizeInFile(0);
 	new_segment->setMemory(true);
@@ -615,9 +617,9 @@ void ElfImage::resolveRelocation(const retdec::fileformat::Relocation& rel, cons
 		}
 	}
 
-	std::cout << std::showbase << "Processing relocation of "
-			  << sym.getName() << " @ " << std::hex << rel.getAddress()
-			  << " to " << symAddress << "+" << rel.getAddend() << std::endl;
+	// std::cout << std::showbase << "Processing relocation of "
+	// 		  << sym.getName() << " @ " << std::hex << rel.getAddress()
+	// 		  << " to " << symAddress << "+" << rel.getAddend() << std::endl;
 
 	const auto* elfInputFile = static_cast<const retdec::fileformat::ElfFormat*>(getFileFormat());
 	switch (getFileFormat()->getTargetArchitecture())
@@ -659,11 +661,11 @@ void ElfImage::resolveRelocation(const retdec::fileformat::Relocation& rel, cons
 		{
 			switch (rel.getType())
 			{
-				// These are needed for object files, they are probably wrong in the context of
-				// linked executables
 				case R_X86_64_PC32:
 				case R_X86_64_PLT32:
 				{
+					// These are needed for object files, they are probably wrong in the context of
+					// linked executables
 					if(getExternFncTable().size() == 0) break;
 					std::uint64_t value;
 					value = symAddress - rel.getAddress() + rel.getAddend();
@@ -707,9 +709,43 @@ void ElfImage::resolveRelocation(const retdec::fileformat::Relocation& rel, cons
 			}
 			else // AArch64 bit relocations
 			{
+				// These are needed for object files, they are probably wrong in the context of
+				// linked executables
 				switch (rel.getType())
 				{
-					// TODO
+					case R_AARCH64_CALL26:
+					{
+						if(getExternFncTable().size() == 0) break;
+						std::uint64_t value;
+						get4Byte(rel.getAddress(), value);
+						std::uint64_t copy = value;
+						value += (symAddress + rel.getAddend() - rel.getSectionOffset()) >> 2;
+						value = (copy & 0xFC000000) | (value & 0x03FFFFFF);
+						set4Byte(rel.getAddress(), value);
+						break;
+					}
+					case R_AARCH64_ADR_PRE:
+					{
+						if(getExternFncTable().size() == 0) break;
+						std::uint64_t value;
+						get4Byte(rel.getAddress(), value);
+						std::uint64_t copy = value;
+						value = ((symAddress + rel.getAddend() - rel.getSectionOffset()) >> 12 ) << 4;
+						value = (copy & 0xFF00000F) | (value & 0x00FFFFF0);
+						set4Byte(rel.getAddress(), value);
+						break;
+					}
+					case R_AARCH64_ADD_ABS:
+					{
+						if(getExternFncTable().size() == 0) break;
+						std::uint64_t value;
+						get4Byte(rel.getAddress(), value);
+						std::uint64_t copy = value;
+						value = (symAddress + rel.getAddend()) << 10;
+						value = (copy & 0xFFC000FF) | (value & 0x000FFF00);
+						set4Byte(rel.getAddress(), value);
+						break;
+					}
 					default:
 						return;
 				}
